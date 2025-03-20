@@ -231,7 +231,8 @@ class Engine:
                 
             # observer check
             jack_index = self.character_names.index(self.jack)
-            #NOTE: 목격자 확인하는 함수 구현하기
+            # NOTE: 목격자 확인하는 함수 구현하기
+            # 목격 상태 표시하는 거 추가
             
             # turn off the light
             if self.round <= 4:
