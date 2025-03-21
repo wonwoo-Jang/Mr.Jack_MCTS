@@ -1,4 +1,4 @@
-# import numpy as np
+import numpy as np
 import random
 
 class Character:
@@ -6,8 +6,7 @@ class Character:
         self.max_move = max_move
         self.name = name
         if name == 'Watson':
-            # 방향 기준: x, y방향으로 좌표가 1, 1 증가하는 방향이 1, 그걸 기준으로 반시계 방향으로 증가
-            self.lantern_dir = 2
+            self.lantern_dir = (-2, 0)
         self.coord = start_coord
         self.is_jack = is_jack
         self.jack_watched = True
@@ -125,29 +124,53 @@ class Engine:
         self.jack_watched = True
 
         # pick Mr.jack from evidence deck
-        jack = random.choice(self.board.evidence_deck)
-        self.board.evidence_deck.remove(jack)
+        self.jack = random.choice(self.board.evidence_deck)
+        self.board.evidence_deck.remove(self.jack)
         
         self.character_names = ['Homes', 'Watson', 'Smith', 'Lestrade', 'Stealthy', 'Goodley', 'Gull', 'Bert']
-        self.characters = [Character('Homes', 3, (11, 6), jack=='Homes'),
-                           Character('Watson', 3, (15, 8), jack=='Watson'),
-                           Character('Smith', 3, (5, 6), jack=='Smith'),
-                           Character('Lestrade', 3, (9, 4), jack=='Lestrade'),
-                           Character('Stealthy', 4, (9, 0), jack=='Stealthy'),
-                           Character('Goodley', 3, (7, 12), jack=='Goodley'),
-                           Character('Gull', 3, (1, 4), jack=='Gull'),
-                           Character('Bert', 3, (7, 8), jack=='Bert'),]
+        self.characters = [Character('Homes', 3, (11, 6), self.jack=='Homes'),
+                           Character('Watson', 3, (15, 8), self.jack=='Watson'),
+                           Character('Smith', 3, (5, 6), self.jack=='Smith'),
+                           Character('Lestrade', 3, (9, 4), self.jack=='Lestrade'),
+                           Character('Stealthy', 4, (9, 0), self.jack=='Stealthy'),
+                           Character('Goodley', 3, (7, 12), self.jack=='Goodley'),
+                           Character('Gull', 3, (1, 4), self.jack=='Gull'),
+                           Character('Bert', 3, (7, 8), self.jack=='Bert'),]
+
+    def get_observed_characters(self):
+        light_grid = np.zeros(self.board.grid_size)
+        directions = [(2, 0), (-2, 0), (1, 1), (1, -1), (-1, 1), (-1, -1)] # 형식이 y, x임에 주의!
+        for character in self.characters:
+            cy, cx = character.coord
+            for dir in directions:
+                dy, dx = dir
+                if 0<=cy+dy<self.board.grid_size[0] and 0<=cx+dx<self.board.grid_size[1]:
+                    light_grid[cy+dy][cx+dx] = 1
+            
+            if character.name == 'Watson':
+                dy, dx = character.lantern_dir
+                while 0<=cy+dy<self.board.grid_size[0] and 0<=cx+dx<self.board.grid_size[1] and self.board.grid[cy+dy][cx+dx] in [1, 3]:
+                    light_grid[cy+dy][cx+dx] = 1
+                    cy, cx = cy + dy, cx + dx
         
+        for valid_light in self.board.valid_light:
+            cy, cx = valid_light
+            for dir in directions:
+                dy, dx = dir
+                light_grid[cy+dy][cx+dx] = 1
+
+        return [light_grid[character.coord[0]][character.coord[1]] for character in self.characters]
+
     def valid_move(self, target_character):
         from collections import deque
 
         start_y, start_x = target_character.coord
-        queue = deque([(start_y, start_x, 0)])  # (y, x, 이동 횟수)
-        visited = set([(start_y, start_x)])  # 중복 이동 방지
+        queue = deque([(start_y, start_x, 0)])
+        visited = set([(start_y, start_x)])
 
         directions = [(2, 0), (-2, 0), (1, 1), (1, -1), (-1, 1), (-1, -1)] # 형식이 y, x임에 주의!
 
-        possible_moves = set()  # 이동 가능한 좌표 저장
+        possible_moves = set()
 
         while queue:
             cy, cx, moves = queue.popleft()
@@ -170,7 +193,7 @@ class Engine:
                             queue.append((ny, nx, moves + 1))
                             visited.add((ny, nx))
 
-            # 구멍(3)에서 다른 구멍(3)으로 이동 가능
+            # move hole to hole
             if self.board.grid[cy][cx] == 3:
                 for hy, hx in self.board.valid_hole:
                     if (hy, hx) != (cy, cx) and (hy, hx) not in visited:
@@ -231,7 +254,8 @@ class Engine:
                 
             # observer check
             jack_index = self.character_names.index(self.jack)
-            # NOTE: 목격자 확인하는 함수 구현하기
+            observed_state = self.get_observed_characters()
+            self.jack_watched = (observed_state[jack_index] == 1)
             # 목격 상태 표시하는 거 추가
             
             # turn off the light
@@ -240,24 +264,68 @@ class Engine:
                 self.board.valid_light = self.board.valid_light[1:]
                 self.board.extinguished_light.append(target_light)
             
-            round += 1
+            self.round += 1
 
-    def test(self):
-        for xy in self.board.valid_hole:
-            print(self.board.grid[xy[0]][xy[1]])
-        self.characters[2].power(self.board, {'turn_on': (2, 5), 'turn_off': (3, 2)})
-        print(self.board.valid_light, self.board.extinguished_light)
-        self.characters[3].power(self.board, {'close_exit': (1, 0), 'open_exit': (16, 1)})
-        print(self.board.valid_exit, self.board.closed_exit)
-        self.characters[7].power(self.board, {'close_hole': (4, 1), 'open_hole': (14, 1)})
-        print(self.board.valid_hole, self.board.closed_hole)
-        # print(self.characters[6].coord, self.characters[3].coord)
-        # self.characters[6].power(self.board, {'switch_character': self.characters[2]})
-        # print(self.characters[6].coord, self.characters[3].coord)
-        evidence = self.characters[0].power(self.board, None)
-        print(evidence, self.board.evidence_deck)
-        
-        print(self.characters[4].coord, self.valid_move(self.characters[4]))
+    def visualize_board(self):
+        import matplotlib.pyplot as plt
+        from matplotlib.patches import RegularPolygon, Circle
+        import numpy as np
+        fig, ax = plt.subplots(figsize=(10, 10), facecolor='black')
+        ax.set_aspect('equal')
+        ax.axis('off')
+
+        hex_radius = 0.04  # 육각형 반지름
+        dx = 3/2 * hex_radius
+        dy = np.sqrt(3) * hex_radius
+
+        # 색상 매핑
+        color_map = {
+            1: 'white',       # 일반
+            2: 'gold',        # 조명
+            3: 'white',       # 구멍 (동그라미 추가로 표시됨)
+            4: 'dodgerblue'   # 출구
+        }
+
+        for row in range(self.board.grid_size[0]):
+            for col in range(self.board.grid_size[1]):
+                value = self.board.grid[row][col]
+                if not value:
+                    continue
+                color = color_map.get(value, 'gray')
+
+                # offset for staggered hex columns
+                x = col * dx
+                y = row//2 * dy + (dy/2 if not(col % 2) else 0)
+
+                # 육각형 그리기
+                hexagon = RegularPolygon(
+                    (x+0.2, -y+0.7),
+                    numVertices=6,
+                    radius=hex_radius,
+                    orientation=np.radians(30),
+                    facecolor=color,
+                    edgecolor='black',
+                    linewidth=1
+                )
+                ax.add_patch(hexagon)
+
+                # 구멍이면 중앙에 원 추가
+                if value == 3:
+                    hole = Circle((x+0.2, -y+0.7), radius=hex_radius * 0.3, color='black')
+                    ax.add_patch(hole)
+
+        # 캐릭터 표시
+        for character in self.characters:
+            cy, cx = character.coord
+            x = cx * dx
+            y = cy//2 * dy + (dy / 2 if not (cx % 2) else 0)
+
+            ax.text(x+0.2, -y+0.7, character.name[0], ha='center', va='center',
+                    fontsize=12, color='red', weight='bold',
+                    bbox=dict(boxstyle='circle,pad=0.3', fc='white', ec='red', lw=2))
+
+        plt.tight_layout()
+        plt.show()
 
 engine = Engine()
-engine.test()
+engine.visualize_board()
