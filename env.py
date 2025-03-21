@@ -1,5 +1,8 @@
 import numpy as np
 import random
+import matplotlib.pyplot as plt
+from matplotlib.patches import RegularPolygon, Circle
+import numpy as np
 
 class Character:
     def __init__(self, name, max_move, start_coord, is_jack):
@@ -15,7 +18,7 @@ class Character:
         self.coord = new_coord
     
     def power(self, board, extra_params):
-        if self.name == 'Homes':
+        if self.name == 'Holmes':
             ## 증거 카드 반환
             evidence = random.choice(board.evidence_deck)
             board.evidence_deck.remove(evidence)
@@ -79,7 +82,6 @@ class Character:
             board.closed_hole[opened_index] = close_hole
             
             return
-            
 
 class Board:
     def __init__(self):
@@ -106,12 +108,15 @@ class Board:
         ]
         self.valid_hole = [(0, 5), (4, 1), (7, 10), (9, 2), (9, 6), (12, 11), (16, 7)]
         self.closed_hole = [(2, 11), (14, 1)]
+        self.hole = [(0, 5), (4, 1), (7, 10), (9, 2), (9, 6), (12, 11), (16, 7), (2, 11), (14, 1)]
         self.valid_light = [(12, 1), (4, 11), (3, 2), (13, 10), (10, 5), (6, 7)]
         self.extinguished_light = [(2, 5), (14, 7)]
+        self.light = [(12, 1), (4, 11), (3, 2), (13, 10), (10, 5), (6, 7), (2, 5), (14, 7)]
         self.valid_exit = [(1, 0), (15, 12)]
         self.closed_exit = [(16, 1), (0, 11)]
-        self.evidence_deck = ['Homes', 'Watson', 'Smith', 'Lestrade', 'Stealthy', 'Goodley', 'Gull', 'Bert']
-        self.action_deck = ['Homes', 'Watson', 'Smith', 'Lestrade', 'Stealthy', 'Goodley', 'Gull', 'Bert']
+        self.exit = [(1, 0), (15, 12), (16, 1), (0, 11)]
+        self.evidence_deck = ['Holmes', 'Watson', 'Smith', 'Lestrade', 'Stealthy', 'Goodley', 'Gull', 'Bert']
+        self.action_deck = ['Holmes', 'Watson', 'Smith', 'Lestrade', 'Stealthy', 'Goodley', 'Gull', 'Bert']
     
 class Engine:
     def __init__(self):
@@ -120,15 +125,16 @@ class Engine:
         # Game property
         self.round = 1
         self.max_round = 8
-        self.isEnd = False
+        self.end = False
         self.jack_watched = True
+        self.jack_win = True
 
         # pick Mr.jack from evidence deck
         self.jack = random.choice(self.board.evidence_deck)
         self.board.evidence_deck.remove(self.jack)
         
-        self.character_names = ['Homes', 'Watson', 'Smith', 'Lestrade', 'Stealthy', 'Goodley', 'Gull', 'Bert']
-        self.characters = [Character('Homes', 3, (11, 6), self.jack=='Homes'),
+        self.character_names = ['Holmes', 'Watson', 'Smith', 'Lestrade', 'Stealthy', 'Goodley', 'Gull', 'Bert']
+        self.characters = [Character('Holmes', 3, (11, 6), self.jack=='Holmes'),
                            Character('Watson', 3, (15, 8), self.jack=='Watson'),
                            Character('Smith', 3, (5, 6), self.jack=='Smith'),
                            Character('Lestrade', 3, (9, 4), self.jack=='Lestrade'),
@@ -137,7 +143,7 @@ class Engine:
                            Character('Gull', 3, (1, 4), self.jack=='Gull'),
                            Character('Bert', 3, (7, 8), self.jack=='Bert'),]
 
-    def get_observed_characters(self):
+    def get_observed(self):
         light_grid = np.zeros(self.board.grid_size)
         directions = [(2, 0), (-2, 0), (1, 1), (1, -1), (-1, 1), (-1, -1)] # 형식이 y, x임에 주의!
         for character in self.characters:
@@ -159,7 +165,7 @@ class Engine:
                 dy, dx = dir
                 light_grid[cy+dy][cx+dx] = 1
 
-        return [light_grid[character.coord[0]][character.coord[1]] for character in self.characters]
+        return light_grid, [light_grid[character.coord[0]][character.coord[1]] for character in self.characters]
 
     def valid_move(self, target_character):
         from collections import deque
@@ -203,6 +209,25 @@ class Engine:
 
         return list(possible_moves)
 
+    def is_end(self, name, move_coord):
+        # 1. capture
+        for character in self.characters:
+            if character.coord == move_coord and character.name != name:
+                if character.name == self.jack:
+                    self.jack_win = False
+                else:
+                    self.jack_win = True
+                return True
+
+        # 2. escape
+        for valid_exit in self.board.valid_exit:
+            if valid_exit == move_coord:
+                if name == self.jack and not self.jack_watched:
+                    self.jack_win = True
+                else:
+                    self.jack_win = False
+                return True
+
     def simulate(self, detector_agent, jack_agent):
         while self.round <= self.max_round:
             # character action phase
@@ -210,66 +235,63 @@ class Engine:
                 random.shuffle(self.board.action_deck)
                 opened_character = self.board.action_deck[:4]
                 self.board.action_deck = self.board.action_deck[4:]
-                
-                # detector select 1
-                selected_character = detector_agent.search_select_character(self, opened_character, next_turn=False)
-                opened_character.remove(selected_character)
-                detector_agent.search_action(self, selected_character)
-                
-                # jack select 2
-                selected_character = jack_agent.search_select_character(self, opened_character, next_turn=True)
-                opened_character.remove(selected_character)
-                jack_agent.search_action(self, selected_character)
-                selected_character = jack_agent.search_select_character(self, opened_character, next_turn=False)
-                opened_character.remove(selected_character)
-                jack_agent.search_action(self, selected_character)
-                
-                # detector select 1
-                selected_character = detector_agent.search_select_character(self, opened_character, next_turn=False)
-                opened_character.remove(selected_character)
-                detector_agent.search_action(self, selected_character)
-                
+
+                agent_sequence = [detector_agent, jack_agent, jack_agent, detector_agent]
+                next_turn_flags = [False, True, False, False]
+
+                for agent, next_turn in zip(agent_sequence, next_turn_flags):
+                    idx, name, order = agent.search_character_and_order(engine, opened_character, next_turn)
+                    opened_character.remove(name)
+
+                    if order == 'move_then_power':
+                        move_coord = agent.search_move(engine, opened_character, next_turn, idx)
+                        if self.is_end(name, move_coord):
+                            break
+                        power_dict = agent.search_power(engine, opened_character, next_turn, name)
+                    else:
+                        power_dict = agent.search_power(engine, opened_character, next_turn, name)
+                        move_coord = agent.search_move(engine, opened_character, next_turn, idx)
+                        if self.is_end(name, move_coord):
+                            break
             else:
                 opened_character = self.board.action_deck
                 
-                # jack select 1
-                selected_character = jack_agent.search_select_character(self, opened_character, next_turn=False)
-                opened_character.remove(selected_character)
-                jack_agent.search_action(self, selected_character)
+                agent_sequence = [jack_agent, detector_agent, detector_agent, jack_agent]
+                next_turn_flags = [False, True, False, False]
+
+                for agent, next_turn in zip(agent_sequence, next_turn_flags):
+                    idx, name, order = agent.search_character_and_order(engine, opened_character, next_turn)
+                    opened_character.remove(name)
+
+                    if order == 'move_then_power':
+                        move_coord = agent.search_move(engine, opened_character, next_turn, idx)
+                        if self.is_end(name, move_coord):
+                            break
+                        power_dict = agent.search_power(engine, opened_character, next_turn, name)
+                    else:
+                        power_dict = agent.search_power(engine, opened_character, next_turn, name)
+                        move_coord = agent.search_move(engine, opened_character, next_turn, idx)
+                        if self.is_end(name, move_coord):
+                            break
                 
-                # detector select 2
-                selected_character = detector_agent.search_select_character(self, opened_character, next_turn=True)
-                opened_character.remove(selected_character)
-                detector_agent.search_action(self, selected_character)
-                selected_character = detector_agent.search_select_character(self, opened_character, next_turn=False)
-                opened_character.remove(selected_character)
-                detector_agent.search_action(self, selected_character)
-                
-                # jack select 1
-                selected_character = jack_agent.search_select_character(self, opened_character, next_turn=False)
-                opened_character.remove(selected_character)
-                jack_agent.search_action(self, selected_character)
-                
-                self.board.action_deck = ['Homes', 'Watson', 'Smith', 'Lestrade', 'Stealthy', 'Goodley', 'Gull', 'Bert']
+                self.board.action_deck = ['Holmes', 'Watson', 'Smith', 'Lestrade', 'Stealthy', 'Goodley', 'Gull', 'Bert']
                 
             # observer check
             jack_index = self.character_names.index(self.jack)
-            observed_state = self.get_observed_characters()
+            _, observed_state = self.get_observed()
             self.jack_watched = (observed_state[jack_index] == 1)
-            # 목격 상태 표시하는 거 추가
-            
+
             # turn off the light
             if self.round <= 4:
                 target_light = self.board.valid_light[0]
                 self.board.valid_light = self.board.valid_light[1:]
                 self.board.extinguished_light.append(target_light)
-            
+
             self.round += 1
 
+        self.jack_win = True
+
     def visualize_board(self):
-        import matplotlib.pyplot as plt
-        from matplotlib.patches import RegularPolygon, Circle
-        import numpy as np
         fig, ax = plt.subplots(figsize=(10, 10), facecolor='black')
         ax.set_aspect('equal')
         ax.axis('off')
@@ -327,5 +349,6 @@ class Engine:
         plt.tight_layout()
         plt.show()
 
-engine = Engine()
-engine.visualize_board()
+if __name__ == '__main__':
+    engine = Engine()
+    engine.visualize_board()
