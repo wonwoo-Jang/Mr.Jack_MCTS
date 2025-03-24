@@ -1,15 +1,18 @@
 import numpy as np
 import random
 import matplotlib.pyplot as plt
-from matplotlib.patches import RegularPolygon, Circle
+from matplotlib.patches import RegularPolygon, Circle, Wedge
+from collections import deque
+import random
 import numpy as np
+import torch
 
 class Character:
     def __init__(self, name, max_move, start_coord, is_jack):
         self.max_move = max_move
         self.name = name
         if name == 'Watson':
-            self.lantern_dir = (-2, 0)
+            self.lantern_dir = (-1, 1)
         self.coord = start_coord
         self.is_jack = is_jack
         self.jack_watched = True
@@ -19,15 +22,14 @@ class Character:
     
     def power(self, board, extra_params):
         if self.name == 'Holmes':
-            ## 증거 카드 반환
             evidence = random.choice(board.evidence_deck)
             board.evidence_deck.remove(evidence)
             
-            return evidence
+            return
 
         if self.name == 'Watson':
             self.lantern_dir = extra_params['lantern_dir']
-            
+
             return
 
         if self.name == 'Smith':
@@ -62,7 +64,7 @@ class Character:
             else:
                 for i in range(3):
                     target_character[i].coord = target_coord[i]
-            
+
             return
 
         if self.name == 'Gull':
@@ -82,6 +84,8 @@ class Character:
             board.closed_hole[opened_index] = close_hole
             
             return
+
+        return
 
 class Board:
     def __init__(self):
@@ -117,18 +121,10 @@ class Board:
         self.exit = [(1, 0), (15, 12), (16, 1), (0, 11)]
         self.evidence_deck = ['Holmes', 'Watson', 'Smith', 'Lestrade', 'Stealthy', 'Goodley', 'Gull', 'Bert']
         self.action_deck = ['Holmes', 'Watson', 'Smith', 'Lestrade', 'Stealthy', 'Goodley', 'Gull', 'Bert']
-    
+
 class Engine:
     def __init__(self):
         self.board = Board()
-        
-        # Game property
-        self.round = 1
-        self.max_round = 8
-        self.end = False
-        self.jack_watched = True
-        self.jack_win = True
-
         # pick Mr.jack from evidence deck
         self.jack = random.choice(self.board.evidence_deck)
         self.board.evidence_deck.remove(self.jack)
@@ -142,6 +138,23 @@ class Engine:
                            Character('Goodley', 3, (7, 12), self.jack=='Goodley'),
                            Character('Gull', 3, (1, 4), self.jack=='Gull'),
                            Character('Bert', 3, (7, 8), self.jack=='Bert'),]
+
+        # Game property
+        self.end = False
+        self.jack_watched = True
+        self.jack_win = True
+        self.excluded_jack_names = [] # observed 정보가 달라서 라운드가 끝나면 update
+
+        self.round = 1
+        self.max_round = 8
+        self.action_index = 0       # 라운드 안에서 진행되는 작은 라운드, 0~3 값
+        self.phase = "char_selection"  # char_selection, move, power, done (char_selection에서 move와 power순서도 정함)
+        self.selected_character = None # char_name
+        self.action_order = None # move_then_power, power_then_move
+        random.shuffle(self.board.action_deck)
+        self.opened_characters = self.board.action_deck[:4]
+        self.board.action_deck = self.board.action_deck[4:]
+        self.already_used_characters = []
 
     def get_observed(self):
         light_grid = np.zeros(self.board.grid_size)
@@ -167,14 +180,18 @@ class Engine:
 
         return light_grid, [light_grid[character.coord[0]][character.coord[1]] for character in self.characters]
 
-    def valid_move(self, target_character):
-        from collections import deque
-
+    def valid_move(self, target_character, mode='detector'):
         start_y, start_x = target_character.coord
+        char_coords = [char.coord for char in self.characters]
+
         queue = deque([(start_y, start_x, 0)])
         visited = set([(start_y, start_x)])
 
         directions = [(2, 0), (-2, 0), (1, 1), (1, -1), (-1, 1), (-1, -1)] # 형식이 y, x임에 주의!
+        if mode == 'detector':
+            valid_cell_type = (1, 3)
+        else:
+            valid_cell_type = (1, 3, 4)
 
         possible_moves = set()
 
@@ -191,21 +208,35 @@ class Engine:
                             queue.append((ny, nx, moves + 1))
                             visited.add((ny, nx))
                             
-                            if self.board.grid[ny][nx] in (1, 3, 4):
+                            if self.board.grid[ny][nx] in valid_cell_type:
+                                if mode == 'jack':
+                                    if (ny, nx) in self.board.valid_exit:
+                                        possible_moves.add((ny, nx))
+                                        continue
+                                    elif (ny, nx) in char_coords:
+                                        continue
                                 possible_moves.add((ny, nx))
                     else:
-                        if self.board.grid[ny][nx] in (1, 3, 4) and (ny, nx) not in visited:
-                            possible_moves.add((ny, nx))
+                        if self.board.grid[ny][nx] in valid_cell_type and (ny, nx) not in visited:
                             queue.append((ny, nx, moves + 1))
                             visited.add((ny, nx))
+                            if mode == 'jack':
+                                if (ny, nx) in self.board.valid_exit:
+                                    possible_moves.add((ny, nx))
+                                    continue
+                                elif (ny, nx) in char_coords:
+                                    continue
+                            possible_moves.add((ny, nx))
 
             # move hole to hole
             if self.board.grid[cy][cx] == 3:
                 for hy, hx in self.board.valid_hole:
                     if (hy, hx) != (cy, cx) and (hy, hx) not in visited:
-                        possible_moves.add((hy, hx))
                         queue.append((hy, hx, moves + 1))
                         visited.add((hy, hx))
+                        if mode == 'jack' and (hy, hx) in char_coords:
+                            continue
+                        possible_moves.add((hy, hx))
 
         return list(possible_moves)
 
@@ -217,6 +248,8 @@ class Engine:
                     self.jack_win = False
                 else:
                     self.jack_win = True
+                self.end = True
+
                 return True
 
         # 2. escape
@@ -226,85 +259,83 @@ class Engine:
                     self.jack_win = True
                 else:
                     self.jack_win = False
+                self.end = True
+
                 return True
+            
+        self.end = False
 
-    def simulate(self, detector_agent, jack_agent):
-        while self.round <= self.max_round:
-            # character action phase
-            if self.round % 2 == 1:
-                random.shuffle(self.board.action_deck)
-                opened_character = self.board.action_deck[:4]
+        return False
+
+    def step(self):
+        if self.phase == 'done':
+            # 라운드가 끝난 경우
+            if self.action_index == 3:
+                # 8 라운드가 끝났으면 게임 종료
+                if self.round >= self.max_round:
+                    self.end = True
+                    self.jack_win = True
+
+                    return
+
+                # 다음 라운드가 8라운드 이하면
+                self.phase = 'char_selection'
+                self.action_index = 0
+                self.selected_character = None
+                self.action_order = None
+                if not self.round % 2:
+                    self.board.action_deck = ['Holmes', 'Watson', 'Smith', 'Lestrade', 'Stealthy', 'Goodley', 'Gull', 'Bert']
+                    random.shuffle(self.board.action_deck)
+                self.opened_characters = self.board.action_deck[:4]
                 self.board.action_deck = self.board.action_deck[4:]
+                self.already_used_characters = []
 
-                agent_sequence = [detector_agent, jack_agent, jack_agent, detector_agent]
-                next_turn_flags = [False, True, False, False]
+                # observer check
+                jack_index = self.character_names.index(self.jack)
+                _, observed_state = self.get_observed()
+                self.jack_watched = (observed_state[jack_index] == 1)
 
-                for agent, next_turn in zip(agent_sequence, next_turn_flags):
-                    idx, name, order = agent.search_character_and_order(engine, opened_character, next_turn)
-                    opened_character.remove(name)
+                # exclude jack
+                new_excluded = []
 
-                    if order == 'move_then_power':
-                        move_coord = agent.search_move(engine, opened_character, next_turn, idx)
-                        if self.is_end(name, move_coord):
-                            break
-                        power_dict = agent.search_power(engine, opened_character, next_turn, name)
-                    else:
-                        power_dict = agent.search_power(engine, opened_character, next_turn, name)
-                        move_coord = agent.search_move(engine, opened_character, next_turn, idx)
-                        if self.is_end(name, move_coord):
-                            break
+                for name, is_observed in zip(self.character_names, observed_state):
+                    if self.jack_watched and not is_observed:
+                        new_excluded.append(name)
+                    elif not self.jack_watched and is_observed:
+                        new_excluded.append(name)
+
+                self.excluded_jack_names = list(set(self.excluded_jack_names + new_excluded))
+
+                # turn off the light
+                if self.round <= 4:
+                    target_light = self.board.valid_light[0]
+                    self.board.valid_light = self.board.valid_light[1:]
+                    self.board.extinguished_light.append(target_light)
+
+                self.round += 1
+
+            # 라운드가 안 끝난 경우
             else:
-                opened_character = self.board.action_deck
-                
-                agent_sequence = [jack_agent, detector_agent, detector_agent, jack_agent]
-                next_turn_flags = [False, True, False, False]
+                self.phase = 'char_selection'
+                self.action_index += 1
+                self.selected_character = None
+                self.action_order = None
 
-                for agent, next_turn in zip(agent_sequence, next_turn_flags):
-                    idx, name, order = agent.search_character_and_order(engine, opened_character, next_turn)
-                    opened_character.remove(name)
-
-                    if order == 'move_then_power':
-                        move_coord = agent.search_move(engine, opened_character, next_turn, idx)
-                        if self.is_end(name, move_coord):
-                            break
-                        power_dict = agent.search_power(engine, opened_character, next_turn, name)
-                    else:
-                        power_dict = agent.search_power(engine, opened_character, next_turn, name)
-                        move_coord = agent.search_move(engine, opened_character, next_turn, idx)
-                        if self.is_end(name, move_coord):
-                            break
-                
-                self.board.action_deck = ['Holmes', 'Watson', 'Smith', 'Lestrade', 'Stealthy', 'Goodley', 'Gull', 'Bert']
-                
-            # observer check
-            jack_index = self.character_names.index(self.jack)
-            _, observed_state = self.get_observed()
-            self.jack_watched = (observed_state[jack_index] == 1)
-
-            # turn off the light
-            if self.round <= 4:
-                target_light = self.board.valid_light[0]
-                self.board.valid_light = self.board.valid_light[1:]
-                self.board.extinguished_light.append(target_light)
-
-            self.round += 1
-
-        self.jack_win = True
+        return
 
     def visualize_board(self):
         fig, ax = plt.subplots(figsize=(10, 10), facecolor='black')
         ax.set_aspect('equal')
         ax.axis('off')
 
-        hex_radius = 0.04  # 육각형 반지름
+        hex_radius = 0.04
         dx = 3/2 * hex_radius
         dy = np.sqrt(3) * hex_radius
 
-        # 색상 매핑
         color_map = {
             1: 'white',       # 일반
-            2: 'gold',        # 조명
-            3: 'white',       # 구멍 (동그라미 추가로 표시됨)
+            2: 'gold',        # 켜진 조명
+            3: 'white',       # 구멍
             4: 'dodgerblue'   # 출구
         }
 
@@ -313,13 +344,18 @@ class Engine:
                 value = self.board.grid[row][col]
                 if not value:
                     continue
+
+                coord = (row, col)
                 color = color_map.get(value, 'gray')
+
+                # extinguished light → darkgoldenrod
+                if coord in self.board.extinguished_light:
+                    color = 'darkgoldenrod'
 
                 # offset for staggered hex columns
                 x = col * dx
-                y = row//2 * dy + (dy/2 if not(col % 2) else 0)
+                y = row//2 * dy + (dy/2 if not (col % 2) else 0)
 
-                # 육각형 그리기
                 hexagon = RegularPolygon(
                     (x+0.2, -y+0.7),
                     numVertices=6,
@@ -331,10 +367,20 @@ class Engine:
                 )
                 ax.add_patch(hexagon)
 
-                # 구멍이면 중앙에 원 추가
+                # 구멍이면 원 표시
                 if value == 3:
                     hole = Circle((x+0.2, -y+0.7), radius=hex_radius * 0.3, color='black')
                     ax.add_patch(hole)
+
+                # 닫힌 구멍 → X 표시
+                if coord in self.board.closed_hole:
+                    ax.text(x+0.2, -y+0.7, 'X', ha='center', va='center',
+                            fontsize=10, color='red', fontweight='bold')
+
+                # 닫힌 출구 → X 표시
+                if coord in self.board.closed_exit:
+                    ax.text(x+0.2, -y+0.7, 'X', ha='center', va='center',
+                            fontsize=10, color='red', fontweight='bold')
 
         # 캐릭터 표시
         for character in self.characters:
@@ -342,12 +388,162 @@ class Engine:
             x = cx * dx
             y = cy//2 * dy + (dy / 2 if not (cx % 2) else 0)
 
-            ax.text(x+0.2, -y+0.7, character.name[0], ha='center', va='center',
+            ax.text(x+0.2, -y+0.7, character.name[:2], ha='center', va='center',
                     fontsize=12, color='red', weight='bold',
                     bbox=dict(boxstyle='circle,pad=0.3', fc='white', ec='red', lw=2))
+            
+            # Watson 랜턴 방향 시각화
+            if character.name == 'Watson':
+                lantern_dir = character.lantern_dir  # 예: (-2, 0)
+                direction_map = {
+                    (-2, 0): 90,    # 위쪽
+                    (-1, 1): 30,
+                    (1, 1): 330,
+                    (2, 0): 270,
+                    (1, -1): 210,
+                    (-1, -1): 150
+                }
+
+                if lantern_dir in direction_map:
+                    angle = direction_map[lantern_dir]
+
+                    # Wedge: 중심, 반지름, 시작각, 끝각
+                    wedge = Wedge(
+                        center=(x+0.2, -y+0.7),
+                        r=hex_radius,
+                        theta1=angle - 30,
+                        theta2=angle + 30,
+                        facecolor='yellow',
+                        alpha=0.6
+                    )
+                    ax.add_patch(wedge)
 
         plt.tight_layout()
         plt.show()
+
+    def extract_state(self, mode='detector'):
+        # (1) 보드 입력 구성
+        board = np.array(self.board.grid, dtype=np.float32)
+        board_overlay = board.copy()
+
+        # 보드 오버레이: 조명, 구멍, 출구 등 추가
+        for coords, val in [
+            (self.board.valid_light, 2),
+            (self.board.extinguished_light, 3),
+            (self.board.valid_exit, 4),
+            (self.board.closed_exit, 5),
+            (self.board.valid_hole, 6),
+            (self.board.closed_hole, 7),
+        ]:
+            coords = np.array(coords)
+            if coords.size > 0:
+                board_overlay[coords[:, 0], coords[:, 1]] = val
+
+        # 캐릭터 위치 맵
+        char_map = np.zeros_like(board, dtype=np.float32)
+        coords = np.array([char.coord for char in self.characters])
+        indices = np.arange(1, len(self.characters) + 1, dtype=np.float32)
+        char_map[coords[:, 0], coords[:, 1]] = indices
+
+        # 목격 정보 맵
+        observed_map, _ = self.get_observed()
+
+        # board_input: (1, 3, 17, 13)
+        board_input = np.stack([board_overlay, char_map, observed_map]).astype(np.float32)
+        board_input = torch.tensor(board_input).unsqueeze(0)
+
+        # (2) 벡터 입력 구성 (misc_input)
+        char_names = self.character_names
+
+        # jack 후보 마스크 (8,)
+        jack_candidates = set(self.board.evidence_deck + [self.jack])
+        jack_input = torch.tensor([
+            1.0 if (name in jack_candidates and name not in self.excluded_jack_names) else 0.0
+            for name in self.character_names
+        ], dtype=torch.float32)
+
+        if mode == 'jack':
+            # 실제 jack 정보
+            real_jack_input = torch.tensor([
+                1.0 if name == self.jack else 0.0
+                for name in self.character_names
+            ], dtype=torch.float32)
+
+        # 오픈된 캐릭터 마스크 (8,)
+        opened_mask = torch.tensor(
+            [1.0 if name in self.opened_characters else 0.0 for name in char_names],
+            dtype=torch.float32
+        )
+
+        # 사용 가능한 캐릭터 마스크 (8,)
+        available_mask = torch.tensor(
+            [1.0 if name in self.opened_characters and name not in self.already_used_characters else 0.0 for name in char_names],
+            dtype=torch.float32
+        )
+
+        # round, action_index (1,)
+        round_info = torch.tensor([self.round / self.max_round], dtype=torch.float32)
+        action_phase_info = torch.tensor([self.action_index / 4], dtype=torch.float32)
+
+        # phase flags (3,)
+        phase_flags = {
+            'char_selection': [1, 0, 0],
+            'move': [0, 1, 0],
+            'power': [0, 0, 1],
+        }
+        phase_flag_tensor = torch.tensor(phase_flags.get(self.phase, [0, 0, 0]), dtype=torch.float32)
+
+        # 행동 순서 정보 ('move_then_power': 0.0, 'power_then_move': 1.0)
+        if self.action_order == 'move_then_power':
+            order_tensor = torch.tensor([0.0], dtype=torch.float32)
+        elif self.action_order == 'power_then_move':
+            order_tensor = torch.tensor([1.0], dtype=torch.float32)
+        else:
+            order_tensor = torch.tensor([-1.0], dtype=torch.float32)  # 선택 전 상태
+
+        # 선택된 캐릭터 one-hot (없으면 all-zero)
+        if self.selected_character is None:
+            selected_char_tensor = torch.zeros(8)
+        else:
+            selected_idx = char_names.index(self.selected_character)
+            selected_char_tensor = torch.nn.functional.one_hot(torch.tensor(selected_idx), num_classes=8).float()
+
+        # 남은 증거 카드 수 (정규화)
+        evidence_count = torch.tensor([len(self.board.evidence_deck) / 8.0], dtype=torch.float32)
+
+        # jack이 목격 상태인지
+        jack_watched = torch.tensor([float(self.jack_watched)], dtype=torch.float32)
+
+        # (3) 최종 misc_input
+        misc_input = torch.cat([
+            jack_input,             # (8,)
+            opened_mask,            # (8,)
+            available_mask,         # (8,)
+            round_info,             # (1,)
+            action_phase_info,      # (1,)
+            phase_flag_tensor,      # (3,)
+            order_tensor,           # (1,)
+            selected_char_tensor,   # (8,)
+            evidence_count,         # (1,)
+            jack_watched            # (1,)
+        ]).unsqueeze(0)             # 최종 shape: (1, 40)
+
+        if mode == 'jack':
+            misc_input = torch.cat([
+                jack_input,             # (8,)
+                real_jack_input,        # (8,)
+                opened_mask,            # (8,)
+                available_mask,         # (8,)
+                round_info,             # (1,)
+                action_phase_info,      # (1,)
+                phase_flag_tensor,      # (3,)
+                order_tensor,           # (1,)
+                selected_char_tensor,   # (8,)
+                evidence_count,         # (1,)
+                jack_watched            # (1,)
+            ]).unsqueeze(0)             # 최종 shape: (1, 48)
+
+        return board_input, misc_input
 
 if __name__ == '__main__':
     engine = Engine()
