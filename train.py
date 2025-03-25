@@ -5,22 +5,8 @@ from env import Engine
 from agent import DetectorAgent, JackAgent
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
-
-# PPO Hyperparameters
-lr = 1e-4
-gamma = 0.99
-lam = 0.95
-clip_epsilon = 0.2
-epochs = 200
-steps_per_epoch = 100
-
-# Initialize Environment and Agent
-detector_agent = DetectorAgent()
-jack_agent = JackAgent()
-optimizer = optim.Adam(detector_agent.value_model.parameters(), lr=lr)
-
-writer = SummaryWriter(log_dir="runs/jack_detector_ppo")
-global_step = 0
+import os
+from utils import mk_next_dir
 
 def run_episode(detector_agent, jack_agent, engine, epsilon=0):
     detector_states = []
@@ -43,21 +29,22 @@ def run_episode(detector_agent, jack_agent, engine, epsilon=0):
 
                 if engine.end:
                     break
+            
+            if engine.end:
+                break
 
             # 캐릭터 행동 이후 자동 처리 로직
             engine.step()
 
-            if engine.end:
-                break
-
         if engine.end:
+            engine.visualize_board()
             detector_reward = 1.0 if not engine.jack_win else -1.0
             jack_reward = -1 * detector_reward
             break
 
     return detector_states, jack_states, detector_reward, jack_reward
 
-def compute_gae(detector_reward, jack_reward, detector_values, jack_values, gamma=gamma, lam=lam):
+def compute_gae(detector_reward, jack_reward, detector_values, jack_values, gamma=0.99, lam=0.95):
     # GAE 계산을 위한 reward 리스트 생성
     T_det = len(detector_values)
     T_jack = len(jack_values)
@@ -86,7 +73,27 @@ def compute_gae(detector_reward, jack_reward, detector_values, jack_values, gamm
 
     return torch.tensor(detector_returns, dtype=torch.float32), torch.tensor(jack_returns, dtype=torch.float32)
 
-if __name__ == '__main__':
+def train():
+    # PPO Hyperparameters
+    lr = 1e-4
+    gamma = 0.99
+    lam = 0.95
+    clip_epsilon = 0.2
+    epochs = 500
+    steps_per_epoch = 200
+
+    # Initialize Environment and Agent
+    detector_agent = DetectorAgent()
+    jack_agent = JackAgent()
+    optimizer = optim.Adam(detector_agent.value_model.parameters(), lr=lr)
+
+    # Create experiment setting
+    save_dir = mk_next_dir(base_dir='runs', prefix='jack_detector_ppo')
+    writer = SummaryWriter(log_dir=save_dir)
+    global_step = 0
+    best_det_loss = float('inf')
+    best_jack_loss = float('inf')
+
     # PPO Training Loop
     for epoch in tqdm(range(epochs)):
         det_epoch_loss = 0
@@ -106,7 +113,7 @@ if __name__ == '__main__':
                 detector_values = detector_agent.value_model(det_board_inputs, det_misc_inputs)
                 jack_values = jack_agent.value_model(jack_board_inputs, jack_misc_inputs)
 
-            gae_detector, gae_jack = compute_gae(detector_reward, jack_reward, detector_values, jack_values)
+            gae_detector, gae_jack = compute_gae(detector_reward, jack_reward, detector_values, jack_values, gamma, lam)
 
             # PPO Critic update for detector
             predicted_det_values = detector_agent.value_model(det_board_inputs, det_misc_inputs).squeeze()
@@ -132,10 +139,27 @@ if __name__ == '__main__':
                 writer.add_scalar("StepLoss/Detector", loss_det.item(), global_step)
                 writer.add_scalar("StepLoss/Jack", loss_jack.item(), global_step)
 
-        writer.add_scalar("EpochLoss/Detector", det_epoch_loss / steps_per_epoch, epoch)
-        writer.add_scalar("EpochLoss/Jack", jack_epoch_loss / steps_per_epoch, epoch)
+        det_avg_loss = det_epoch_loss / steps_per_epoch
+        jack_avg_loss = jack_epoch_loss / steps_per_epoch
 
-    # Save trained models
-    torch.save(detector_agent.value_model.state_dict(), 'trained_detector_value_model.pth')
-    torch.save(jack_agent.value_model.state_dict(), 'trained_jack_value_model.pth')
+        writer.add_scalar("EpochLoss/Detector", det_avg_loss, epoch)
+        writer.add_scalar("EpochLoss/Jack", jack_avg_loss, epoch)
 
+        # print(f"Epoch {epoch + 1}/{epochs}, Detector_Loss: {det_avg_loss:.4f}")
+        # print(f"Epoch {epoch + 1}/{epochs}, Jack_Loss: {jack_avg_loss:.4f}")
+
+        # Save trained models
+        if det_avg_loss < best_det_loss:
+            best_det_loss = det_avg_loss
+            torch.save(detector_agent.value_model.state_dict(), os.path.join(save_dir, 'ckpt', f'detector_value_model_{epoch}th_epoch.pth'))
+
+        if jack_avg_loss < best_jack_loss:
+            best_jack_loss = jack_avg_loss
+            torch.save(detector_agent.value_model.state_dict(), os.path.join(save_dir, 'ckpt', f'jack_value_model_{epoch}th_epoch.pth'))
+
+if __name__ == '__main__':
+    engine = Engine()
+    detector_agent = DetectorAgent()
+    jack_agent = JackAgent()
+    run_episode(detector_agent, jack_agent, engine)
+    # train()

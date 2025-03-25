@@ -24,6 +24,10 @@ class Character:
         if self.name == 'Holmes':
             evidence = random.choice(board.evidence_deck)
             board.evidence_deck.remove(evidence)
+            if extra_params['current_turn'] == 'detector':
+                board.detector_evidence.append(evidence)
+            else:
+                board.jack_evidence.append(evidence)
             
             return
 
@@ -120,6 +124,8 @@ class Board:
         self.closed_exit = [(16, 1), (0, 11)]
         self.exit = [(1, 0), (15, 12), (16, 1), (0, 11)]
         self.evidence_deck = ['Holmes', 'Watson', 'Smith', 'Lestrade', 'Stealthy', 'Goodley', 'Gull', 'Bert']
+        self.detector_evidence = [] # detector가 뽑은 evidence character
+        self.jack_evidence = []
         self.action_deck = ['Holmes', 'Watson', 'Smith', 'Lestrade', 'Stealthy', 'Goodley', 'Gull', 'Bert']
 
 class Engine:
@@ -188,10 +194,6 @@ class Engine:
         visited = set([(start_y, start_x)])
 
         directions = [(2, 0), (-2, 0), (1, 1), (1, -1), (-1, 1), (-1, -1)] # 형식이 y, x임에 주의!
-        if mode == 'detector':
-            valid_cell_type = (1, 3)
-        else:
-            valid_cell_type = (1, 3, 4)
 
         possible_moves = set()
 
@@ -208,25 +210,22 @@ class Engine:
                             queue.append((ny, nx, moves + 1))
                             visited.add((ny, nx))
                             
-                            if self.board.grid[ny][nx] in valid_cell_type:
-                                if mode == 'jack':
-                                    if (ny, nx) in self.board.valid_exit:
-                                        possible_moves.add((ny, nx))
-                                        continue
-                                    elif (ny, nx) in char_coords:
-                                        continue
+                            if self.board.grid[ny][nx] in (1, 3):
+                                if mode == 'jack' and (ny, nx) in char_coords:
+                                    continue
+                                possible_moves.add((ny, nx))
+                            if mode == 'jack' and (ny, nx) in self.board.valid_exit and target_character.name == self.jack and not self.jack_watched:
                                 possible_moves.add((ny, nx))
                     else:
-                        if self.board.grid[ny][nx] in valid_cell_type and (ny, nx) not in visited:
-                            queue.append((ny, nx, moves + 1))
-                            visited.add((ny, nx))
-                            if mode == 'jack':
-                                if (ny, nx) in self.board.valid_exit:
-                                    possible_moves.add((ny, nx))
+                        if  (ny, nx) not in visited:
+                            if self.board.grid[ny][nx] in (1, 3):
+                                queue.append((ny, nx, moves + 1))
+                                visited.add((ny, nx))
+                                if mode == 'jack' and (ny, nx) in char_coords:
                                     continue
-                                elif (ny, nx) in char_coords:
-                                    continue
-                            possible_moves.add((ny, nx))
+                                possible_moves.add((ny, nx))
+                            if mode == 'jack' and (ny, nx) in self.board.valid_exit and target_character.name == self.jack and not self.jack_watched:
+                                possible_moves.add((ny, nx))
 
             # move hole to hole
             if self.board.grid[cy][cx] == 3:
@@ -324,7 +323,7 @@ class Engine:
         return
 
     def visualize_board(self):
-        fig, ax = plt.subplots(figsize=(10, 10), facecolor='black')
+        fig, ax = plt.subplots(figsize=(14, 10), facecolor='black')
         ax.set_aspect('equal')
         ax.axis('off')
 
@@ -333,10 +332,7 @@ class Engine:
         dy = np.sqrt(3) * hex_radius
 
         color_map = {
-            1: 'white',       # 일반
-            2: 'gold',        # 켜진 조명
-            3: 'white',       # 구멍
-            4: 'dodgerblue'   # 출구
+            1: 'white', 2: 'gold', 3: 'white', 4: 'dodgerblue'
         }
 
         for row in range(self.board.grid_size[0]):
@@ -347,76 +343,102 @@ class Engine:
 
                 coord = (row, col)
                 color = color_map.get(value, 'gray')
-
-                # extinguished light → darkgoldenrod
                 if coord in self.board.extinguished_light:
                     color = 'darkgoldenrod'
 
-                # offset for staggered hex columns
                 x = col * dx
                 y = row//2 * dy + (dy/2 if not (col % 2) else 0)
 
                 hexagon = RegularPolygon(
-                    (x+0.2, -y+0.7),
-                    numVertices=6,
-                    radius=hex_radius,
-                    orientation=np.radians(30),
-                    facecolor=color,
-                    edgecolor='black',
-                    linewidth=1
-                )
+                                            xy=(x+0.2, -y+0.7),
+                                            numVertices=6,
+                                            radius=hex_radius,
+                                            orientation=np.radians(30),
+                                            facecolor=color,
+                                            edgecolor='black',
+                                            linewidth=1
+                                        )
                 ax.add_patch(hexagon)
 
-                # 구멍이면 원 표시
                 if value == 3:
-                    hole = Circle((x+0.2, -y+0.7), radius=hex_radius * 0.3, color='black')
-                    ax.add_patch(hole)
+                    ax.add_patch(Circle((x+0.2, -y+0.7), hex_radius * 0.3, color='black'))
 
-                # 닫힌 구멍 → X 표시
-                if coord in self.board.closed_hole:
+                if coord in self.board.closed_hole or coord in self.board.closed_exit:
                     ax.text(x+0.2, -y+0.7, 'X', ha='center', va='center',
                             fontsize=10, color='red', fontweight='bold')
 
-                # 닫힌 출구 → X 표시
-                if coord in self.board.closed_exit:
-                    ax.text(x+0.2, -y+0.7, 'X', ha='center', va='center',
-                            fontsize=10, color='red', fontweight='bold')
-
-        # 캐릭터 표시
         for character in self.characters:
             cy, cx = character.coord
             x = cx * dx
             y = cy//2 * dy + (dy / 2 if not (cx % 2) else 0)
 
+            name_color = 'blue' if self.selected_character == character.name else 'red'
+
             ax.text(x+0.2, -y+0.7, character.name[:2], ha='center', va='center',
-                    fontsize=12, color='red', weight='bold',
-                    bbox=dict(boxstyle='circle,pad=0.3', fc='white', ec='red', lw=2))
-            
-            # Watson 랜턴 방향 시각화
+                    fontsize=12, color=name_color, weight='bold',
+                    bbox=dict(boxstyle='circle,pad=0.3', fc='white', ec=name_color, lw=2))
+
             if character.name == 'Watson':
-                lantern_dir = character.lantern_dir  # 예: (-2, 0)
-                direction_map = {
-                    (-2, 0): 90,    # 위쪽
-                    (-1, 1): 30,
-                    (1, 1): 330,
-                    (2, 0): 270,
-                    (1, -1): 210,
-                    (-1, -1): 150
-                }
+                dir_map = {(-2, 0): 90, (-1, 1): 30, (1, 1): 330,
+                        (2, 0): 270, (1, -1): 210, (-1, -1): 150}
+                if character.lantern_dir in dir_map:
+                    angle = dir_map[character.lantern_dir]
+                    ax.add_patch(Wedge((x+0.2, -y+0.7), hex_radius,
+                                    angle - 30, angle + 30,
+                                    facecolor='yellow', alpha=0.6))
 
-                if lantern_dir in direction_map:
-                    angle = direction_map[lantern_dir]
+        # === 추가 정보 표시 영역 ===
+        info_x = 1.0
+        info_y = 0.8
+        gap = 0.05
 
-                    # Wedge: 중심, 반지름, 시작각, 끝각
-                    wedge = Wedge(
-                        center=(x+0.2, -y+0.7),
-                        r=hex_radius,
-                        theta1=angle - 30,
-                        theta2=angle + 30,
-                        facecolor='yellow',
-                        alpha=0.6
-                    )
-                    ax.add_patch(wedge)
+        ax.text(info_x, info_y, f"Phase: {self.phase}", color='white', fontsize=12, transform=ax.transAxes)
+        info_y -= gap
+        if self.selected_character:
+            ax.text(info_x, info_y, f"Selected: {self.selected_character}", color='skyblue', fontsize=12, transform=ax.transAxes)
+            info_y -= gap
+
+        if self.round % 2:
+            if self.action_index in [0, 3]:
+                current_turn = 'detector'
+            else:
+                current_turn = 'jack'
+        else:
+            if self.action_index in [1, 2]:
+                current_turn = 'detector'
+            else:
+                current_turn = 'jack'
+        ax.text(info_x, info_y, f"Current Turn: {current_turn}", color='lightgreen', fontsize=12, transform=ax.transAxes)
+        info_y -= gap
+
+        ax.text(info_x, info_y, f"Round: {self.round} / {self.max_round}", color='orange', fontsize=12, transform=ax.transAxes)
+        info_y -= gap
+        ax.text(info_x, info_y, f"Sub-Round: {self.action_index + 1} / 4", color='orange', fontsize=12, transform=ax.transAxes)
+        info_y -= gap * 2
+
+        ax.text(info_x, info_y, f"Mr. jack: {self.jack}", color='magenta', fontsize=12, transform=ax.transAxes)
+        info_y -= gap
+
+        ax.text(info_x, info_y, "jack Candidates:", color='white', fontsize=12, transform=ax.transAxes)
+        info_y -= gap
+        for name in self.character_names:
+            mark = " (X)" if name in set(self.excluded_jack_names + self.board.detector_evidence) else ""
+            ax.text(info_x + 0.02, info_y, f"- {name}{mark}", color='white', fontsize=11, transform=ax.transAxes)
+            info_y -= gap * 0.8
+
+        if self.end:
+            winner = "jack" if self.jack_win else "detector"
+            ax.text(info_x, info_y, f"{winner} wins!", color='cyan', fontsize=14, fontweight='bold', transform=ax.transAxes)
+            info_y -= gap
+
+        circle_x, circle_y = 0.5, -0.08  # Axes 좌표 기준 위치
+        ax.text(0.5, -0.03, "Jack Observed State", fontsize=12, color='white',
+                ha='center', transform=ax.transAxes)
+
+        jack_circle_color = 'white' if self.jack_watched else 'gray'
+        circle = Circle((circle_x, circle_y), 0.02, color=jack_circle_color,
+                        transform=ax.transAxes, clip_on=False)
+        ax.add_patch(circle)
 
         plt.tight_layout()
         plt.show()
@@ -455,12 +477,18 @@ class Engine:
         # (2) 벡터 입력 구성 (misc_input)
         char_names = self.character_names
 
-        # jack 후보 마스크 (8,)
-        jack_candidates = set(self.board.evidence_deck + [self.jack])
-        jack_input = torch.tensor([
-            1.0 if (name in jack_candidates and name not in self.excluded_jack_names) else 0.0
-            for name in self.character_names
-        ], dtype=torch.float32)
+        # jack 후보 마스크 (8,): detector면 evidence에 없는 카드, jack이면 jack이 얻은 evidence가 input
+        if mode == 'detector':
+            jack_candidates = [candidates not in self.board.detector_evidence for candidates in self.character_names]
+            jack_input = torch.tensor([
+                1.0 if (name in jack_candidates and name not in self.excluded_jack_names) else 0.0
+                for name in self.character_names
+            ], dtype=torch.float32)
+        else:
+            jack_input = torch.tensor([
+                1.0 if (name in self.board.jack_evidence) else 0.0
+                for name in self.character_names
+            ], dtype=torch.float32)
 
         if mode == 'jack':
             # 실제 jack 정보

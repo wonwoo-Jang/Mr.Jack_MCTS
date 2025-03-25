@@ -1,6 +1,8 @@
 import copy
 from itertools import combinations, product
 from collections import deque
+import re
+import os
 
 def generate_all_possible_next_states(engine, mode='detector'):
     """
@@ -66,6 +68,20 @@ def generate_all_possible_next_states(engine, mode='detector'):
                     power_param = {
                         'grab_character': char_objs,
                         'target_coord': power_param['target_coord']
+                    }
+                if character_copy.name == 'Holmes':
+                    if new_engine.round % 2:
+                        if new_engine.action_index in [0, 3]:
+                            current_turn = 'detector'
+                        else:
+                            current_turn = 'jack'
+                    else:
+                        if new_engine.action_index in [1, 2]:
+                            current_turn = 'detector'
+                        else:
+                            current_turn = 'jack'
+                    power_param = {
+                        'current_turn': current_turn,
                     }
                 character_copy.power(new_engine.board, power_param)
 
@@ -220,6 +236,24 @@ def bfs_all_shortest_paths(start, goal, board):
                         queue.append((next_coord, path + [next_coord]))
 
     return shortest_paths  # [ [start,...,goal], ... ]
+
+def mk_next_dir(base_dir="runs", prefix="jack_detector_ppo"):
+    pattern = re.compile(rf"^{re.escape(prefix)}_(\d+)$")
+    numbers = []
+
+    for name in os.listdir(base_dir):
+        match = pattern.match(name)
+        if match:
+            numbers.append(int(match.group(1)))
+
+    next_num = max(numbers, default=0) + 1
+    new_dir_name = f"{prefix}_{next_num}"
+    new_dir_path = os.path.join(base_dir, new_dir_name)
+
+    # 디렉토리 생성
+    os.makedirs(new_dir_path)
+
+    return new_dir_path
 
 if __name__ == '__main__':
     from env import Engine
