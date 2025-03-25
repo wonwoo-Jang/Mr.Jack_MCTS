@@ -4,8 +4,11 @@ from utils import generate_all_possible_next_states
 import random
 
 class DetectorAgent:
-    def __init__(self):
+    def __init__(self, model_path=None):
         self.value_model = DetectorValueModel()
+        if model_path:
+            state_dict = torch.load(model_path, weights_only=True)
+            self.value_model.load_state_dict(state_dict)
         self.name = 'detector'
 
     def select_best_next_state(self, engine, epsilon=0):
@@ -31,8 +34,11 @@ class DetectorAgent:
         return best_state
 
 class JackAgent:
-    def __init__(self):
+    def __init__(self, model_path=None):
         self.value_model = JackValueModel()
+        if model_path:
+            state_dict = torch.load(model_path, weights_only=True)
+            self.value_model.load_state_dict(state_dict)
         self.name = 'jack'
 
     def select_best_next_state(self, engine, epsilon=0):

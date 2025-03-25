@@ -237,7 +237,7 @@ def bfs_all_shortest_paths(start, goal, board):
 
     return shortest_paths  # [ [start,...,goal], ... ]
 
-def mk_next_dir(base_dir="runs", prefix="jack_detector_ppo"):
+def mk_experiment_dir(base_dir="runs", prefix="jack_detector_ppo"):
     pattern = re.compile(rf"^{re.escape(prefix)}_(\d+)$")
     numbers = []
 
@@ -252,6 +252,7 @@ def mk_next_dir(base_dir="runs", prefix="jack_detector_ppo"):
 
     # 디렉토리 생성
     os.makedirs(new_dir_path)
+    os.makedirs(os.path.join(new_dir_path, 'ckpt/'))
 
     return new_dir_path
 
